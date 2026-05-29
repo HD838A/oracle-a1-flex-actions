@@ -1,4 +1,4 @@
-name: Try to Create OCI A1.Flex VM
+name: Oracle A1 Flex Scheduled Retry
 
 on:
   schedule:
