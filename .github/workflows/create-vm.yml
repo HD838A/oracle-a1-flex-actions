@@ -1,0 +1,149 @@
+name: Try to Create OCI A1.Flex VM
+
+"on":
+  schedule:
+    - cron: "2,7,12,17,22,27,32,37,42,47,52,57 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  INSTANCE_DISPLAY_NAME: oracle-a1-flex-us-sanjose-1
+  OCI_SHAPE: VM.Standard.A1.Flex
+  OCPUS: "4"
+  MEMORY_IN_GBS: "24"
+  BOOT_VOLUME_SIZE_IN_GBS: "50"
+
+jobs:
+  create-vm:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Cache OCI CLI
+        uses: actions/cache@v4
+        with:
+          path: ~/.local
+          key: ${{ runner.os }}-oci-cli-v1
+
+      - name: Add OCI CLI to path
+        run: echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Install OCI CLI
+        run: python3 -m pip install --user oci-cli
+
+      - name: Configure OCI CLI
+        env:
+          OCI_CLI_REGION: ${{ secrets.OCI_CLI_REGION }}
+          OCI_CLI_USER: ${{ secrets.OCI_CLI_USER }}
+          OCI_CLI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
+          OCI_CLI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
+          OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+        run: |
+          set -euo pipefail
+          for name in OCI_CLI_REGION OCI_CLI_USER OCI_CLI_TENANCY OCI_CLI_FINGERPRINT OCI_CLI_KEY_CONTENT; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Missing GitHub secret: $name"
+              exit 1
+            fi
+          done
+
+          mkdir -p "$HOME/.oci"
+          printf '%s\n' "$OCI_CLI_KEY_CONTENT" > "$HOME/.oci/oci_api_key.pem"
+          chmod 600 "$HOME/.oci/oci_api_key.pem"
+
+          {
+            printf '[DEFAULT]\n'
+            printf 'user=%s\n' "$OCI_CLI_USER"
+            printf 'tenancy=%s\n' "$OCI_CLI_TENANCY"
+            printf 'fingerprint=%s\n' "$OCI_CLI_FINGERPRINT"
+            printf 'key_file=%s/.oci/oci_api_key.pem\n' "$HOME"
+            printf 'region=%s\n' "$OCI_CLI_REGION"
+          } > "$HOME/.oci/config"
+          chmod 600 "$HOME/.oci/config"
+
+      - name: Try to create instance
+        id: create_vm
+        env:
+          OCI_CLI_REGION: ${{ secrets.OCI_CLI_REGION }}
+          OCI_COMPARTMENT_ID: ${{ secrets.OCI_COMPARTMENT_ID }}
+          AD_NAME: ${{ secrets.AD_NAME }}
+          IMAGE_ID: ${{ secrets.IMAGE_ID }}
+          OCI_SUBNET_ID: ${{ secrets.OCI_SUBNET_ID }}
+          SSH_PUBLIC_KEY: ${{ secrets.SSH_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          for name in OCI_COMPARTMENT_ID AD_NAME IMAGE_ID OCI_SUBNET_ID SSH_PUBLIC_KEY; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Missing GitHub secret: $name"
+              exit 1
+            fi
+          done
+
+          instances_json="$(oci compute instance list \
+            --compartment-id "$OCI_COMPARTMENT_ID" \
+            --all \
+            --output json)"
+
+          existing="$(python3 -c 'import json, os, sys; target=os.environ["INSTANCE_DISPLAY_NAME"]; payload=json.load(sys.stdin); match=next((i for i in payload.get("data", []) if i.get("display-name") == target and i.get("lifecycle-state") != "TERMINATED"), None); print(json.dumps({"id": match.get("id"), "display_name": match.get("display-name"), "state": match.get("lifecycle-state"), "region": os.environ.get("OCI_CLI_REGION", "")})) if match else None' <<< "$instances_json")"
+
+          if [ -n "$existing" ]; then
+            echo "result=existing" >> "$GITHUB_OUTPUT"
+            echo "summary=$existing" >> "$GITHUB_OUTPUT"
+            echo "Instance already exists: $existing"
+            exit 0
+          fi
+
+          printf '%s\n' "$SSH_PUBLIC_KEY" > "$RUNNER_TEMP/ssh_public_key.pub"
+
+          set +e
+          launch_output="$(oci compute instance launch \
+            --compartment-id "$OCI_COMPARTMENT_ID" \
+            --availability-domain "$AD_NAME" \
+            --shape "$OCI_SHAPE" \
+            --shape-config "{\"ocpus\":${OCPUS},\"memoryInGBs\":${MEMORY_IN_GBS}}" \
+            --subnet-id "$OCI_SUBNET_ID" \
+            --image-id "$IMAGE_ID" \
+            --ssh-authorized-keys-file "$RUNNER_TEMP/ssh_public_key.pub" \
+            --assign-public-ip true \
+            --display-name "$INSTANCE_DISPLAY_NAME" \
+            --boot-volume-size-in-gbs "$BOOT_VOLUME_SIZE_IN_GBS" \
+            --output json 2>&1)"
+          status=$?
+          set -e
+
+          {
+            echo "log<<EOF"
+            echo "$launch_output"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+          if [ "$status" -eq 0 ]; then
+            summary="$(python3 -c 'import json, sys; payload=json.load(sys.stdin); data=payload.get("data", payload); print(json.dumps({"id": data.get("id"), "display_name": data.get("display-name"), "state": data.get("lifecycle-state"), "region": data.get("region", "")}))' <<< "$launch_output")"
+            echo "result=created" >> "$GITHUB_OUTPUT"
+            echo "summary=$summary" >> "$GITHUB_OUTPUT"
+            echo "Instance creation started: $summary"
+            exit 0
+          fi
+
+          if grep -qi "Out of host capacity" <<< "$launch_output"; then
+            echo "result=capacity" >> "$GITHUB_OUTPUT"
+            echo "Oracle returned Out of host capacity. The next scheduled run will retry."
+            exit 0
+          fi
+
+          echo "result=error" >> "$GITHUB_OUTPUT"
+          echo "::error::OCI launch failed for a reason other than host capacity."
+          echo "$launch_output"
+          exit 1
+
+      - name: Send Bark success notification
+        if: steps.create_vm.outputs.result == 'created'
+        env:
+          BARK_SUCCESS_URL: ${{ secrets.BARK_SUCCESS_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "$BARK_SUCCESS_URL" ]; then
+            echo "::warning::Missing GitHub secret: BARK_SUCCESS_URL"
+            exit 0
+          fi
+          curl --fail --silent --show-error --max-time 20 "$BARK_SUCCESS_URL"

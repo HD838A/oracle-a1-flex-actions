@@ -1,0 +1,12 @@
+.DS_Store
+.env
+.env.*
+*.log
+*.pem
+*.key
+oci.env
+oci_config
+oracle_launch_api_responses.jsonl
+INSTANCE_CREATED
+ERROR_IN_CONFIG.log
+UNHANDLED_ERROR.log
