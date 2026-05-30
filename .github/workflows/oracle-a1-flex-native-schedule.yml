@@ -2,15 +2,11 @@ name: Oracle A1 Flex Native Schedule
 
 on:
   schedule:
-    - cron: "7,17,27,37,47,57 * * * *"
+    - cron: "37 * * * *"
   workflow_dispatch:
 
 permissions:
   contents: read
-
-concurrency:
-  group: oracle-a1-flex-retry
-  cancel-in-progress: false
 
 env:
   INSTANCE_DISPLAY_NAME: oracle-a1-flex-us-sanjose-1
