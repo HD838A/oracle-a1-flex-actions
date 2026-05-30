@@ -1,8 +1,8 @@
-name: Oracle A1 Flex Scheduled Retry
+name: Oracle A1 Flex Native Schedule
 
 on:
   schedule:
-    - cron: "8,18,28,38,48,58 * * * *"
+    - cron: "7,17,27,37,47,57 * * * *"
   workflow_dispatch:
 
 permissions:
