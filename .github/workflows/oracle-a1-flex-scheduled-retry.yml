@@ -2,7 +2,7 @@ name: Oracle A1 Flex Scheduled Retry
 
 on:
   schedule:
-    - cron: "*/5 * * * *"
+    - cron: "8,18,28,38,48,58 * * * *"
   workflow_dispatch:
 
 permissions:
