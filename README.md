@@ -6,7 +6,7 @@ Secrets are stored in GitHub Actions repository secrets. No OCI keys, config fil
 
 ## Schedule
 
-The workflow uses GitHub Actions native `schedule` and runs at minute `37` every hour in UTC.
+The workflow uses GitHub Actions native `schedule` and runs every 10 minutes at minutes `7,17,27,37,47,57` every hour in UTC.
 
 ## Notifications
 
